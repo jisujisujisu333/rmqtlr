@@ -1,135 +1,879 @@
-# main.py — 급식 월드컵 8강. 대결 한 번이 표의 한 행이 된다.
-import random
-import uuid
 
 import streamlit as st
-from supabase import create_client
+import pandas as pd
+import numpy as np
+import plotly.express as px
+import plotly.graph_objects as go
 
-MENUS = ["제육볶음", "간장찜닭", "가자미순살튀김", "돈육불백",
-         "미트볼데리야끼볶음", "수육", "진미채고추장볶음", "치즈떡닭갈비"]
-ROUND = {8: "8강", 4: "4강", 2: "결승"}
+# ==================================================
+# 1. 기본 설정
+# ==================================================
 
-st.header("🏆 급식 월드컵")
-st.caption("이름 없이 참여하는 연습 게임입니다. 대결 기록 수는 참여 인원과 다릅니다.")
+st.set_page_config(
+    page_title="영화 관객 데이터 분석실",
+    page_icon="🎬",
+    layout="wide"
+)
+
+st.markdown("""
+<style>
+.stApp {
+    background-color: #F3F7FC;
+}
+
+.main-title {
+    font-size: 34px;
+    font-weight: 800;
+    color: #183B65;
+}
+
+.sub-title {
+    color: #54708F;
+    font-size: 16px;
+}
+
+.section-title {
+    font-size: 23px;
+    font-weight: 750;
+    color: #244B78;
+    padding-top: 12px;
+}
+
+.question {
+    background-color: #E4EFFB;
+    padding: 13px 17px;
+    border-radius: 10px;
+    color: #244B78;
+    font-size: 16px;
+    font-weight: 600;
+    margin-bottom: 15px;
+}
+
+div[data-testid="stMetric"] {
+    background-color: white;
+    border-radius: 12px;
+    padding: 15px;
+    border: 1px solid #DCE7F3;
+}
+
+</style>
+""", unsafe_allow_html=True)
 
 
-@st.cache_resource
-def connect():
-    return create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
+# ==================================================
+# 2. 데이터 불러오기
+# ==================================================
+
+DATA_URL = (
+    "https://raw.githubusercontent.com/"
+    "greatsong/my-data-log/refs/heads/main/"
+    "data/kobis_daily_log.csv"
+)
+
+
+@st.cache_data
+def load_data():
+
+    df = pd.read_csv(
+        DATA_URL,
+        encoding="utf-8-sig"
+    )
+
+    df["날짜"] = pd.to_datetime(
+        df["날짜"].astype(str),
+        format="%Y%m%d",
+        errors="coerce"
+    )
+
+    numeric_cols = [
+        "순위", "일관객", "누적관객",
+        "스크린수", "상영횟수"
+    ]
+
+    for col in numeric_cols:
+        df[col] = pd.to_numeric(
+            df[col], errors="coerce"
+        )
+
+    df = df.dropna(
+        subset=["날짜", "영화명", "일관객"]
+    )
+
+    df["요일"] = df["날짜"].dt.day_name()
+    df["월"] = df["날짜"].dt.month
+
+    return df
 
 
 try:
-    db = connect()
-except Exception:
-    st.error("연결 정보를 확인하세요. 선생님이 표와 권한을 준비한 뒤 연결합니다.")
+    df = load_data()
+
+except Exception as e:
+    st.error(f"데이터를 불러오지 못했습니다: {e}")
     st.stop()
 
 
-def new_game():
-    order = MENUS[:]
-    random.shuffle(order)                      # 대진표를 판마다 섞는다
-    st.session_state.game_id = uuid.uuid4().hex
-    st.session_state.queue = order             # 이번 라운드에서 겨룰 차례
-    st.session_state.winners = []              # 이번 라운드에서 이긴 반찬
-    st.session_state.size = len(order)         # 이번 라운드의 크기 (8·4·2)
-    st.session_state.save_pending = False
+# ==================================================
+# 3. 제목
+# ==================================================
 
+st.markdown(
+    '<div class="main-title">🎬 영화 관객 데이터 분석실</div>',
+    unsafe_allow_html=True
+)
 
-if "queue" not in st.session_state:
-    new_game()
-
-# 이번 라운드가 끝났으면 다음 라운드를 준비한다
-if not st.session_state.queue and len(st.session_state.winners) > 1:
-    st.session_state.queue = st.session_state.winners
-    st.session_state.winners = []
-    st.session_state.size = len(st.session_state.queue)
-
-def choose(winner, left, right, round_name):
-    st.session_state.save_pending = True
-    try:
-        db.table("menu_duels").insert({
-            "game_id": st.session_state.game_id,
-            "round": round_name,
-            "left_menu": left,
-            "right_menu": right,
-            "winner": winner,
-        }).execute()
-    except Exception:
-        # 통신 오류여도 DB에는 저장되었을 수 있어 재제출을 잠근다
-        st.rerun()
-    st.session_state.save_pending = False
-    st.session_state.winners.append(winner)
-    st.session_state.queue = st.session_state.queue[2:]
-    st.rerun()
-
-
-if not st.session_state.queue:                 # 결승까지 끝났다
-    st.success("우승: " + st.session_state.winners[0])
-    if st.button("다시 하기"):
-        new_game()
-        st.rerun()
-else:
-    left, right = st.session_state.queue[0], st.session_state.queue[1]
-    round_name = ROUND[st.session_state.size]
-    st.subheader(round_name)
-    if st.session_state.save_pending:
-        st.warning("저장 결과를 확인하지 못했습니다. 재선택을 잠갔습니다. 선생님에게 확인하세요.")
-    col_l, col_r = st.columns(2)
-    if col_l.button(left, use_container_width=True, disabled=st.session_state.save_pending):
-        choose(left, left, right, round_name)
-    if col_r.button(right, use_container_width=True, disabled=st.session_state.save_pending):
-        choose(right, left, right, round_name)
-
-st.caption("판 번호: " + st.session_state.game_id)
-st.caption("반복 참여를 막지는 않습니다. 저장 결과 확인이 필요하면 이 판 번호를 준비 담당자에게 알려 주세요.")
-# main.py에 이어 붙일 부분 — 학급의 대결 기록을 분석한다
-import pandas as pd
-import plotly.express as px
+st.markdown(
+    '<div class="sub-title">'
+    'KOBIS 일별 박스오피스 데이터를 활용한 영화 흥행 분석'
+    '</div>',
+    unsafe_allow_html=True
+)
 
 st.divider()
-st.subheader("학급 대결 기록")
 
-st.button("결과 새로 불러오기")
-try:
-    # 조회 시작 때의 마지막 id까지만, 빠짐없이 나누어 읽는다
-    latest = db.table("menu_duels").select("id").order("id", desc=True).limit(1).execute().data
-    upper = latest[0]["id"] if latest else 0
-    records = []
-    after = 0
-    while after < upper:
-        page = (db.table("menu_duels")
-                .select("id,game_id,round,left_menu,right_menu,winner")
-                .gt("id", after).lte("id", upper).order("id").limit(500).execute().data)
-        if not page:
-            raise RuntimeError("마지막 기록까지 조회하지 못했습니다.")
-        records.extend(page)
-        after = page[-1]["id"]
-except Exception:
-    st.error("기록을 불러오지 못했습니다.")
+
+# ==================================================
+# 4. 전체 데이터 요약
+# ==================================================
+
+st.subheader("📊 데이터 한눈에 보기")
+
+col1, col2, col3, col4 = st.columns(4)
+
+with col1:
+    st.metric("전체 기록 수", f"{len(df):,}개")
+
+with col2:
+    st.metric("분석 영화 수", f"{df['영화명'].nunique():,}편")
+
+with col3:
+    st.metric(
+        "전체 기록 관객 수 합계",
+        f"{df['일관객'].sum():,}명"
+    )
+
+with col4:
+    st.metric(
+        "데이터 기간",
+        f"{df['날짜'].min():%Y.%m.%d} ~ "
+        f"{df['날짜'].max():%Y.%m.%d}"
+    )
+
+
+st.divider()
+
+
+# ==================================================
+# 5. 분석 기간 설정
+# ==================================================
+
+st.subheader("🗓️ 분석 기간 설정")
+
+date_range = st.date_input(
+    "분석할 날짜를 선택하세요.",
+    value=(df["날짜"].min().date(),
+           df["날짜"].max().date()),
+    min_value=df["날짜"].min().date(),
+    max_value=df["날짜"].max().date()
+)
+
+if not isinstance(date_range, (tuple, list)) or len(date_range) != 2:
+    st.warning("시작 날짜와 종료 날짜를 모두 선택하세요.")
     st.stop()
 
-if not records:
-    st.info("아직 대결 기록이 없습니다.")
+start_date, end_date = date_range
+
+if start_date > end_date:
+    st.error("시작 날짜가 종료 날짜보다 늦을 수 없습니다.")
     st.stop()
 
-duels = pd.DataFrame(records)
-# 겨룬 횟수는 왼쪽과 오른쪽을 모두 센다
-fought = pd.concat([duels["left_menu"], duels["right_menu"]]).value_counts()
-won = duels["winner"].value_counts()
-champion = duels[duels["round"] == "결승"]["winner"].value_counts()
+filtered = df[
+    (df["날짜"].dt.date >= start_date) &
+    (df["날짜"].dt.date <= end_date)
+].copy()
 
-board = pd.DataFrame({"겨룬 횟수": fought, "이긴 횟수": won, "우승": champion}).reindex(MENUS).fillna(0).astype(int)
-board["승률(%)"] = (board["이긴 횟수"] / board["겨룬 횟수"].where(board["겨룬 횟수"] > 0) * 100).round(1)
-board = board.sort_values("승률(%)", ascending=False).reset_index(names="반찬")
+if filtered.empty:
+    st.warning("선택한 기간에 데이터가 없습니다.")
+    st.stop()
 
-st.caption("대결 " + str(len(duels)) + "번 · 기록이 있는 판 " + str(duels["game_id"].nunique()) + "개")
-st.caption("결승 기록이 있는 판 " + str(duels.loc[duels["round"] == "결승", "game_id"].nunique()) + "개 · 진행 중 기록도 포함합니다.")
-st.caption("대결이 없는 후보의 승률은 비어 있습니다. 대결 수와 판 수는 참여 인원이 아닙니다.")
-st.dataframe(board, hide_index=True, width="stretch")
+st.caption(
+    f"현재 분석 기간: {start_date} ~ {end_date}"
+)
 
-fig = px.bar(board.dropna(subset=["승률(%)"]).sort_values("승률(%)"), x="승률(%)", y="반찬", orientation="h",
-             text="승률(%)", color="승률(%)", color_continuous_scale="Oranges",
-             title="반찬별 승률")
-fig.update_layout(coloraxis_showscale=False, yaxis_title="")
-st.plotly_chart(fig, width="stretch")
-st.caption("조회 도중 들어온 새 기록은 다시 불러오면 반영됩니다. 승률은 대진표와 반복 참여의 영향을 받습니다.")
+st.divider()
+
+
+# ==================================================
+# 6. 사이드바 메뉴
+# ==================================================
+
+st.sidebar.title("🎬 분석 메뉴")
+
+menu = st.sidebar.radio(
+    "원하는 분석을 선택하세요.",
+    [
+        "전체 그래프",
+        "1. 선 그래프",
+        "2. 다중 선 그래프",
+        "3. 영역 그래프",
+        "4. 가로 막대 그래프",
+        "5. 히트맵",
+        "6. 도넛 그래프",
+        "7. 트리맵",
+        "8. 히스토그램",
+        "9. 산점도",
+        "10. 박스플롯",
+        "11. 버블 그래프",
+        "12. 선버스트"
+    ]
+)
+
+
+# ==================================================
+# 7. 그래프 공통 함수
+# ==================================================
+
+def show_question(question):
+    st.markdown(
+        f'<div class="question">🔍 분석 질문: {question}</div>',
+        unsafe_allow_html=True
+    )
+
+
+def show_chart(fig):
+    fig.update_layout(
+        template="plotly_white",
+        font=dict(family="Malgun Gothic, sans-serif"),
+        margin=dict(l=30, r=30, t=60, b=30)
+    )
+
+    st.plotly_chart(
+        fig,
+        use_container_width=True
+    )
+
+
+def genre_unavailable():
+    st.info(
+        "현재 CSV에는 영화 장르 정보가 없습니다. "
+        "장르 정보가 추가되면 이 그래프를 사용할 수 있습니다."
+    )
+
+
+# ==================================================
+# 8. 1. 선 그래프
+# ==================================================
+
+def line_chart():
+
+    st.markdown(
+        '<div class="section-title">📈 1. 선 그래프</div>',
+        unsafe_allow_html=True
+    )
+
+    show_question(
+        "한 영화의 관객은 개봉 후 어떻게 변하나?"
+    )
+
+    movies = sorted(filtered["영화명"].unique())
+
+    selected = st.selectbox(
+        "분석할 영화를 선택하세요.",
+        movies,
+        key="single_movie"
+    )
+
+    data = filtered[
+        filtered["영화명"] == selected
+    ].sort_values("날짜").copy()
+
+    first_date = data["날짜"].min()
+
+    data["경과일"] = (
+        data["날짜"] - first_date
+    ).dt.days
+
+    fig = px.line(
+        data,
+        x="경과일",
+        y="일관객",
+        markers=True,
+        title=f"{selected}의 관객 수 변화",
+        hover_data=["날짜", "누적관객"],
+        labels={
+            "경과일": "첫 관측일 이후 경과일",
+            "일관객": "일일 관객 수 (명)"
+        }
+    )
+
+    show_chart(fig)
+
+    st.caption(
+        "※ 실제 개봉일이 아니라 선택한 분석 기간에서 "
+        "해당 영화가 처음 관측된 날을 기준으로 합니다."
+    )
+
+
+# ==================================================
+# 9. 2. 다중 선 그래프
+# ==================================================
+
+def multi_line_chart():
+
+    st.markdown(
+        '<div class="section-title">📈 2. 다중 선 그래프</div>',
+        unsafe_allow_html=True
+    )
+
+    show_question(
+        "흥행 대작들의 곡선은 서로 닮았나?"
+    )
+
+    top_n = st.slider(
+        "비교할 영화 수",
+        2, 10, 5
+    )
+
+    top_movies = (
+        filtered.groupby("영화명")["누적관객"]
+        .max()
+        .nlargest(top_n)
+        .index.tolist()
+    )
+
+    data = filtered[
+        filtered["영화명"].isin(top_movies)
+    ].copy()
+
+    data = data.sort_values("날짜")
+
+    first_dates = (
+        data.groupby("영화명")["날짜"]
+        .transform("min")
+    )
+
+    data["경과일"] = (
+        data["날짜"] - first_dates
+    ).dt.days
+
+    # 첫 관측일의 관객 수를 100으로 놓고
+    # 영화별 관객 변화 패턴 비교
+    data["기준 관객"] = (
+        data.groupby("영화명")["일관객"]
+        .transform("first")
+    )
+
+    data["관객 지수"] = np.where(
+        data["기준 관객"] > 0,
+        data["일관객"] / data["기준 관객"] * 100,
+        np.nan
+    )
+
+    fig = px.line(
+        data,
+        x="경과일",
+        y="관객 지수",
+        color="영화명",
+        title="흥행 영화별 관객 변화 패턴 비교",
+        labels={
+            "경과일": "첫 관측일 이후 경과일",
+            "관객 지수": "관객 변화 지수 (첫 관측일=100)"
+        }
+    )
+
+    show_chart(fig)
+
+    st.caption(
+        "영화마다 첫 관측일의 관객 수를 100으로 설정하여 "
+        "관객 변화 형태를 비교합니다."
+    )
+
+
+# ==================================================
+# 10. 3. 영역 그래프
+# ==================================================
+
+def area_chart():
+
+    st.markdown(
+        '<div class="section-title">📊 3. 영역 그래프</div>',
+        unsafe_allow_html=True
+    )
+
+    show_question(
+        "1년 중 극장이 가장 붐빈 날은 언제인가?"
+    )
+
+    daily = (
+        filtered.groupby("날짜", as_index=False)
+        ["일관객"].sum()
+    )
+
+    fig = px.area(
+        daily,
+        x="날짜",
+        y="일관객",
+        title="날짜별 전체 기록 관객 수",
+        labels={
+            "날짜": "날짜",
+            "일관객": "일일 관객 수 합계 (명)"
+        }
+    )
+
+    show_chart(fig)
+
+    peak = daily.loc[
+        daily["일관객"].idxmax()
+    ]
+
+    st.success(
+        f"가장 관객이 많았던 기록일: "
+        f"{peak['날짜']:%Y년 %m월 %d일} "
+        f"({peak['일관객']:,.0f}명)"
+    )
+
+    st.caption(
+        "※ 일별 박스오피스 10위권에 기록된 영화의 합계입니다. "
+        "극장 전체 관객 수와는 다를 수 있습니다."
+    )
+
+
+# ==================================================
+# 11. 4. 가로 막대 그래프
+# ==================================================
+
+def bar_chart():
+
+    st.markdown(
+        '<div class="section-title">📊 4. 가로 막대 그래프</div>',
+        unsafe_allow_html=True
+    )
+
+    show_question(
+        "이 기간에 관객이 가장 많았던 영화는 무엇인가?"
+    )
+
+    top_n = st.slider(
+        "표시할 영화 수",
+        5, 20, 10,
+        key="bar_n"
+    )
+
+    ranking = (
+        filtered.groupby("영화명", as_index=False)
+        ["일관객"].sum()
+        .sort_values("일관객", ascending=False)
+        .head(top_n)
+    )
+
+    fig = px.bar(
+        ranking.sort_values("일관객"),
+        x="일관객",
+        y="영화명",
+        orientation="h",
+        text="일관객",
+        title="기간 내 영화별 관객 수 합계",
+        labels={
+            "일관객": "기간 내 관객 수 합계 (명)",
+            "영화명": "영화명"
+        }
+    )
+
+    fig.update_traces(
+        texttemplate="%{text:,.0f}명",
+        textposition="outside"
+    )
+
+    show_chart(fig)
+
+    st.caption(
+        "※ 선택 기간의 일일 관객 수를 합산한 결과입니다. "
+        "10위권 밖의 날짜는 누락될 수 있습니다."
+    )
+
+
+# ==================================================
+# 12. 5. 히트맵
+# ==================================================
+
+def heatmap_chart():
+
+    st.markdown(
+        '<div class="section-title">🔥 5. 히트맵</div>',
+        unsafe_allow_html=True
+    )
+
+    show_question(
+        "월 × 요일로 보면 언제 관객이 몰리나?"
+    )
+
+    data = filtered.copy()
+
+    weekday_order = [
+        "Monday", "Tuesday", "Wednesday",
+        "Thursday", "Friday", "Saturday", "Sunday"
+    ]
+
+    weekday_korean = {
+        "Monday": "월요일",
+        "Tuesday": "화요일",
+        "Wednesday": "수요일",
+        "Thursday": "목요일",
+        "Friday": "금요일",
+        "Saturday": "토요일",
+        "Sunday": "일요일"
+    }
+
+    pivot = data.pivot_table(
+        index="월",
+        columns="요일",
+        values="일관객",
+        aggfunc="sum",
+        fill_value=0
+    )
+
+    pivot = pivot.reindex(
+        columns=weekday_order,
+        fill_value=0
+    )
+
+    pivot.columns = [
+        weekday_korean[c] for c in pivot.columns
+    ]
+
+    fig = px.imshow(
+        pivot,
+        text_auto=".2s",
+        aspect="auto",
+        color_continuous_scale="Blues",
+        title="월별 · 요일별 관객 수"
+    )
+
+    fig.update_layout(
+        xaxis_title="요일",
+        yaxis_title="월"
+    )
+
+    show_chart(fig)
+
+
+# ==================================================
+# 13. 6. 도넛 그래프
+# ==================================================
+
+def donut_chart():
+
+    st.markdown(
+        '<div class="section-title">🍩 6. 도넛 그래프</div>',
+        unsafe_allow_html=True
+    )
+
+    show_question(
+        "10위권에 든 영화의 장르 구성은?"
+    )
+
+    genre_unavailable()
+
+
+# ==================================================
+# 14. 7. 트리맵
+# ==================================================
+
+def treemap_chart():
+
+    st.markdown(
+        '<div class="section-title">🌳 7. 트리맵</div>',
+        unsafe_allow_html=True
+    )
+
+    show_question(
+        "장르 안에서 어떤 영화가 컸나?"
+    )
+
+    genre_unavailable()
+
+
+# ==================================================
+# 15. 8. 히스토그램
+# ==================================================
+
+def histogram_chart():
+
+    st.markdown(
+        '<div class="section-title">📊 8. 히스토그램</div>',
+        unsafe_allow_html=True
+    )
+
+    show_question(
+        "영화 대부분은 관객이 몇 명쯤인가?"
+    )
+
+    fig = px.histogram(
+        filtered,
+        x="일관객",
+        nbins=40,
+        title="일일 관객 수 분포",
+        labels={
+            "일관객": "일일 관객 수 (명)",
+            "count": "기록 수"
+        }
+    )
+
+    show_chart(fig)
+
+    st.caption(
+        "각 영화의 날짜별 관객 수가 어느 구간에 "
+        "많이 분포하는지 확인합니다."
+    )
+
+
+# ==================================================
+# 16. 9. 산점도
+# ==================================================
+
+def scatter_chart():
+
+    st.markdown(
+        '<div class="section-title">🔵 9. 산점도</div>',
+        unsafe_allow_html=True
+    )
+
+    show_question(
+        "스크린을 많이 받은 영화가 관객도 많나?"
+    )
+
+    fig = px.scatter(
+        filtered,
+        x="스크린수",
+        y="일관객",
+        color="순위",
+        hover_name="영화명",
+        hover_data=["날짜", "상영횟수"],
+        title="스크린 수와 일일 관객 수의 관계",
+        labels={
+            "스크린수": "스크린 수",
+            "일관객": "일일 관객 수 (명)",
+            "순위": "박스오피스 순위"
+        }
+    )
+
+    show_chart(fig)
+
+    corr = filtered[
+        ["스크린수", "일관객"]
+    ].corr().iloc[0, 1]
+
+    st.metric(
+        "스크린 수와 관객 수의 상관계수",
+        f"{corr:.3f}" if pd.notna(corr) else "계산 불가"
+    )
+
+    st.caption(
+        "상관관계가 나타나더라도 스크린 수가 관객 수 증가의 "
+        "직접적인 원인이라고 단정할 수는 없습니다."
+    )
+
+
+# ==================================================
+# 17. 10. 박스플롯
+# ==================================================
+
+def boxplot_chart():
+
+    st.markdown(
+        '<div class="section-title">📦 10. 박스플롯</div>',
+        unsafe_allow_html=True
+    )
+
+    show_question(
+        "장르별 관객 분포는 어떻게 다른가?"
+    )
+
+    genre_unavailable()
+
+
+# ==================================================
+# 18. 11. 버블 그래프
+# ==================================================
+
+def bubble_chart():
+
+    st.markdown(
+        '<div class="section-title">🫧 11. 버블 그래프</div>',
+        unsafe_allow_html=True
+    )
+
+    show_question(
+        "첫 주 관객까지 넣으면 무엇이 더 보이나?"
+    )
+
+    data = filtered.sort_values("날짜").copy()
+
+    # 영화별 첫 관측일 이후 7일의 관객 수 계산
+    first_dates = (
+        data.groupby("영화코드")["날짜"]
+        .transform("min")
+    )
+
+    data["경과일"] = (
+        data["날짜"] - first_dates
+    ).dt.days
+
+    first_week = data[
+        data["경과일"] < 7
+    ]
+
+    summary = (
+        first_week.groupby(
+            ["영화코드", "영화명"],
+            as_index=False
+        )
+        .agg(
+            첫주관객=("일관객", "sum"),
+            최대스크린수=("스크린수", "max"),
+            최대누적관객=("누적관객", "max")
+        )
+    )
+
+    if summary.empty:
+        st.warning("분석할 데이터가 없습니다.")
+        return
+
+    fig = px.scatter(
+        summary,
+        x="첫주관객",
+        y="최대누적관객",
+        size="최대스크린수",
+        color="최대스크린수",
+        hover_name="영화명",
+        title="영화별 첫 7일 관객 수와 누적 관객 수",
+        labels={
+            "첫주관객": "첫 7일 관객 수 (명)",
+            "최대누적관객": "최대 기록 누적 관객 수 (명)",
+            "최대스크린수": "최대 스크린 수"
+        },
+        size_max=55
+    )
+
+    show_chart(fig)
+
+    st.caption(
+        "※ 첫 7일은 실제 개봉일이 아니라 "
+        "데이터에서 처음 관측된 날부터 계산합니다."
+    )
+
+
+# ==================================================
+# 19. 12. 선버스트
+# ==================================================
+
+def sunburst_chart():
+
+    st.markdown(
+        '<div class="section-title">☀️ 12. 선버스트</div>',
+        unsafe_allow_html=True
+    )
+
+    show_question(
+        "국가에서 장르로 내려가면 무엇이 보일까?"
+    )
+
+    st.info(
+        "현재 CSV에는 국가와 장르 정보가 없습니다. "
+        "영화별 국가 및 장르 데이터가 추가되면 "
+        "계층형 선버스트 그래프를 구현할 수 있습니다."
+    )
+
+
+# ==================================================
+# 20. 전체 그래프
+# ==================================================
+
+def all_charts():
+
+    line_chart()
+    st.divider()
+
+    multi_line_chart()
+    st.divider()
+
+    area_chart()
+    st.divider()
+
+    bar_chart()
+    st.divider()
+
+    heatmap_chart()
+    st.divider()
+
+    histogram_chart()
+    st.divider()
+
+    scatter_chart()
+    st.divider()
+
+    bubble_chart()
+    st.divider()
+
+    st.subheader("추가 분석: 장르 및 국가 데이터 필요")
+
+    donut_chart()
+    treemap_chart()
+    boxplot_chart()
+    sunburst_chart()
+
+
+# ==================================================
+# 21. 메뉴 실행
+# ==================================================
+
+if menu == "전체 그래프":
+    all_charts()
+
+elif menu == "1. 선 그래프":
+    line_chart()
+
+elif menu == "2. 다중 선 그래프":
+    multi_line_chart()
+
+elif menu == "3. 영역 그래프":
+    area_chart()
+
+elif menu == "4. 가로 막대 그래프":
+    bar_chart()
+
+elif menu == "5. 히트맵":
+    heatmap_chart()
+
+elif menu == "6. 도넛 그래프":
+    donut_chart()
+
+elif menu == "7. 트리맵":
+    treemap_chart()
+
+elif menu == "8. 히스토그램":
+    histogram_chart()
+
+elif menu == "9. 산점도":
+    scatter_chart()
+
+elif menu == "10. 박스플롯":
+    boxplot_chart()
+
+elif menu == "11. 버블 그래프":
+    bubble_chart()
+
+elif menu == "12. 선버스트":
+    sunburst_chart()
+
+
+# ==================================================
+# 22. 하단 안내
+# ==================================================
+
+st.divider()
+
+st.caption(
+    "🎬 영화 관객 데이터 분석실 | "
+    "KOBIS 일별 박스오피스 데이터 활용"
+)
